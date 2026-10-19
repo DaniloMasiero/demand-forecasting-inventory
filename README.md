@@ -1,6 +1,6 @@
 # Weekly Demand Forecasting for Inventory Planning
 
-> Status: model done; cost analysis next
+> Status: complete
 
 ## Business problem
 A retailer has to decide how much of each product to stock every week. Overstock ties up cash
@@ -108,16 +108,41 @@ slightly above the median (0.60) gives the trade-off directly.
   be learning 2010's calendar. Dropping it did not help on validation, but more years of data
   would be needed to trust it.
 
+## What the better forecast is worth (`src/inventory.py`)
+A buyer orders forecast + safety stock to cover the 4-week lead time. A better forecast needs
+less safety stock for the same protection. No cost assumptions are needed: safety stock is
+valued at each SKU's median 2011 selling price.
+
+**Textbook sizing fails out of sample.** Safety stock = mean error + 1.645 x std of error (aims
+at 95% of cycles without stockout), sized on the validation period, reaches only 80% (moving
+average) and 84% (model) on the test period. Errors in the Q4 peak are larger than in spring,
+and lumpy demand has fatter tails than the normal curve assumes.
+
+**Same service level, less inventory.** Sweeping the safety factor shows how much safety stock
+each forecast needs to reach a given share of cycles without stockout on the test period:
+
+| Service level | Moving average 12w | LightGBM | Saved |
+|---|---|---|---|
+| 80% | GBP 269k | GBP 230k | **GBP 39k (14.5%)** |
+| 85% | GBP 359k | GBP 303k | **GBP 56k (15.6%)** |
+| 90% | GBP 498k | GBP 417k | **GBP 81k (16.2%)** |
+| 95% | GBP 808k | GBP 713k | **GBP 95k (11.8%)** |
+
+A 4.7% lower forecast error turns into 12-16% less safety stock: the model's errors are not just
+smaller on average but less dispersed, and safety stock is driven by the dispersion.
+Caveat: this curve is read on the test period itself, so it compares the two forecasts fairly
+but is not a sizing rule to deploy as is.
+
 ## Recommendation
-The gain is real but modest. For a buyer it matters most in the Q4 peak, when the moving
-average falls furthest behind. With demand this lumpy, most of the remaining error is
-order-level noise that no model removes; it should be handled with safety stock sized from
-the forecast error per SKU.
+Use the model for the 526 steady SKUs, with safety stock sized per SKU from its backtest errors
+and re-calibrated before Q4, when errors grow. At an 85-90% service level it frees about
+GBP 56-81k of safety stock on these products alone. The gain is largest in the Q4 peak, when
+the moving average falls furthest behind.
 
 ## Next steps
-1. Translate errors into money: cost of overstock vs. stockout per SKU, using unit prices.
-2. Safety stock per SKU from the backtest error distribution.
-3. Forecast at a higher level (category or total) and allocate down; compare.
+1. Size safety stock with empirical error quantiles per season instead of the normal formula.
+2. Forecast at a higher level (category or total) and allocate down; compare.
+3. A separate method for the other 4,100 short-lived SKUs (intermittent demand).
 
 ## What I would do differently
 - With more history, validate seasonality across several years before trusting week-of-year.
@@ -130,4 +155,5 @@ python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 python src/load_data.py && python src/prepare.py && python src/baselines.py
 python src/validate.py && python src/validate.py --round 2   # model choice
 python src/model.py                                          # final test
+python src/inventory.py                                      # safety stock value
 ```
