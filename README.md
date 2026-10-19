@@ -1,6 +1,6 @@
 # Weekly Demand Forecasting for Inventory Planning
 
-> Status: in progress
+> Status: model done; cost analysis next
 
 ## Business problem
 A retailer has to decide how much of each product to stock every week. Overstock ties up cash
@@ -64,17 +64,70 @@ Error barely changes from 1 to 4 weeks ahead.
    comes from the Q4 ramp-up, which a backward-looking average reacts to late. A model has
    to beat it on WAPE without making the bias worse.
 
+## Model: global LightGBM (`src/model.py`)
+- **One model for all 526 SKUs**, not one per SKU. Two noisy years per product is too little to
+  fit a model each (ARIMA per SKU would overfit). Together, the products share patterns such as
+  the Q4 ramp-up and life-cycle decline.
+- **Scale-free target:** units divided by the SKU's 12-week mean, so a 10-unit and a 1,000-unit
+  SKU look alike. Sample weights equal to that mean bring the loss back to units.
+- **Features known at the origin:** recent lags, 4- and 26-week means, volatility, share of zero
+  weeks, short-term trend, last year's level around the target week, weeks to Christmas,
+  week of year and horizon.
+- **Retrained at every origin** with only targets already observed at that point.
+
+### Choosing the variant on a validation period, not on the test
+Every variant was compared on 16 earlier origins (Mar to Jun 2011). The test period was used
+once, for the chosen variant. Rule: lowest WAPE among variants with |bias| <= 10%.
+
+| Variant (validation) | WAPE | Bias |
+|---|---|---|
+| L1 loss | 0.627 | -20.3% |
+| L1 blended 50/50 with MA12 | 0.629 | -11.6% |
+| Quantile 0.55 | 0.638 | -13.1% |
+| **Quantile 0.60 (chosen)** | **0.655** | **-5.2%** |
+| Moving average 12w (baseline) | 0.660 | -3.0% |
+| L2 loss (mean), with or without week of year | 0.692-0.694 | +5-6% |
+| L1 + rescaling bias correction, with or without week of year | 0.716-0.718 | +10% |
+
+The key finding: **L1 loss learns the median**, and demand is right-skewed (big irregular
+orders), so the median sits below the mean. The L1 model "wins" on WAPE by under-forecasting
+by 20%, which means stockouts. Rescaling the forecast overshoots. Training on a quantile
+slightly above the median (0.60) gives the trade-off directly.
+
+### Test results (Jul to Nov 2011, 16 origins, 4 weeks ahead)
+| | WAPE | Bias |
+|---|---|---|
+| **LightGBM, quantile 0.60** | **0.593** | -10.3% |
+| Moving average 12w | 0.622 | -9.8% |
+
+- 4.7% lower error than the best baseline with the same bias. The model is better on 58% of SKUs.
+- In the Oct-Nov peak it wins on both: WAPE 0.600 vs 0.621, bias -10.3% vs -13.6%. The moving
+  average reacts late to the ramp-up; the model sees it coming through the calendar features.
+- In Jul-Sep it has lower error, but it under-forecasts more (-10.4% vs -5.8%).
+- Week of year carries 38% of the gain. With a single past season this is a risk: the model may
+  be learning 2010's calendar. Dropping it did not help on validation, but more years of data
+  would be needed to trust it.
+
+## Recommendation
+The gain is real but modest. For a buyer it matters most in the Q4 peak, when the moving
+average falls furthest behind. With demand this lumpy, most of the remaining error is
+order-level noise that no model removes; it should be handled with safety stock sized from
+the forecast error per SKU.
+
 ## Next steps
-1. Model: LightGBM with lag, rolling and calendar features, one global model for all SKUs.
-2. Same backtest and metrics as the baselines, plus the cost of error (overstock vs. stockout).
-3. Recommendation: where the model helps, where the baseline is good enough.
+1. Translate errors into money: cost of overstock vs. stockout per SKU, using unit prices.
+2. Safety stock per SKU from the backtest error distribution.
+3. Forecast at a higher level (category or total) and allocate down; compare.
 
 ## What I would do differently
-_To be filled in._
+- With more history, validate seasonality across several years before trusting week-of-year.
+- Define the bias rule from the business costs up front, instead of a fixed 10% threshold.
 
 ## How to run
 ```
 python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 # download Online Retail II from the UCI repository into data/raw/
 python src/load_data.py && python src/prepare.py && python src/baselines.py
+python src/validate.py && python src/validate.py --round 2   # model choice
+python src/model.py                                          # final test
 ```

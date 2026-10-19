@@ -20,14 +20,24 @@ def to_wide(panel: pd.DataFrame) -> pd.DataFrame:
 
 
 def origins(wide: pd.DataFrame) -> list[int]:
-    """Column positions of the last observed week at each origin."""
+    """Column positions of the last observed week at each test origin."""
     last = wide.shape[1] - 1 - HORIZON
     return list(range(last - N_ORIGINS + 1, last + 1))
 
 
-def run(wide: pd.DataFrame, forecaster: Forecaster, name: str) -> pd.DataFrame:
+def validation_origins(wide: pd.DataFrame) -> list[int]:
+    """The N_ORIGINS origins right before the test ones, whose targets end before the test starts.
+
+    Model choices are made here; the test period is used once, to report the chosen model.
+    """
+    first_test = origins(wide)[0]
+    last = first_test - HORIZON
+    return list(range(last - N_ORIGINS + 1, last + 1))
+
+
+def run(wide: pd.DataFrame, forecaster: Forecaster, name: str, at: list[int] | None = None) -> pd.DataFrame:
     rows = []
-    for t in origins(wide):
+    for t in (origins(wide) if at is None else at):
         history = wide.iloc[:, : t + 1]
         actual = wide.iloc[:, t + 1 : t + 1 + HORIZON].to_numpy()
         pred = np.clip(forecaster(history, HORIZON), 0, None)   # demand is never negative
